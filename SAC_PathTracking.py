@@ -5,11 +5,10 @@ Path tracking simulation with pure pursuit steering and PID speed control.
 References :
 
     1)    Experimental Validation of a Kinematic Bicycle Model Predictice Control With Lateral Acceleration Consideration : IFAC PapersOnLine 52-8 (2019) 289–294 
-    2)    Lateral Vehicle Dynamics : https://www.researchgate.net/profile/Mohamed_Mourad_Lafifi/post/any_one_have_an_idea_of_longitudinal_and_lateral_state_space_model/attachment/59d64def79197b80779a75f1/AS%3A490374658564097%401493925837376/download/9780387263960-c2.pdf
-    3)    Kinematic and Dynamic Vehicle Model-Assisted Global Positioning Method for Autonomous Vehicles with Low-Cost GPS/Camera/In-Vehicle Sensors : Sensors 2019, 19, 2217; doi:10.3390/s19102217
-    4)    Path Planning using a Dynamic Vehicle Model : https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=1684472
-    5)    Automatic Steering Methods for Autonomous Automobile Path Tracking : CMU-RI-TR-09-08 
-    6)    Development of lateral control system for autonomous vehicle based on adaptive pure pursuit algorithm : https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=6987787 
+    2)    Automatic Steering Methods for Autonomous Automobile Path Tracking : CMU-RI-TR-09-08  
+    3)    D. S. Lal, A. Vivek and G. Selvaraj, "Lateral control of an autonomous vehicle based on Pure Pursuit algorithm," 2017 International Conference on Technological Advancements in Power and Energy ( TAP Energy), Kollam, India, 2017, pp. 1-8, doi: 10.1109/TAPENERGY.2017.8397361.  
+    4)    R. Wang, Y. Li, J. Fan, T. Wang and X. Chen, "A Novel Pure Pursuit Algorithm for Autonomous Vehicles Based on Salp Swarm Algorithm and Velocity Controller," in IEEE Access, vol. 8, pp. 166525-166540, 2020, doi: 10.1109/ACCESS.2020.3023071.
+
 
 """
 import numpy as np
@@ -32,134 +31,6 @@ dt = 0.1    # dt: The time step used in the simulation, representing the interva
 
 
 
-def HHO(lb,ub,dim,SearchAgents_no,Max_iter):
-
-    #dim=30
-    #SearchAgents_no=50
-    #lb=-100
-    #ub=100
-    #Max_iter=500
-        
-    
-    # initialize the location and Energy of the rabbit
-    Rabbit_Location=np.zeros(dim)
-    Rabbit_Energy=float("inf")  #change this to -inf for maximization problems
-    
-    
-    #Initialize the locations of Harris' hawks
-    X=np.random.uniform(0,1,(SearchAgents_no,dim)) *(ub-lb)+lb
-    
-    #Initialize convergence
-    convergence_curve=np.zeros(Max_iter)
-    
-    
-    ############################
-    #s=solution()
-
-    print("HHO is now tackling  \""+objf.__name__+"\"")    
-
-    timerStart=time.time() 
-    #s.startTime=time.strftime("%Y-%m-%d-%H-%M-%S")
-    ############################
-    
-    t=0  # Loop counter
-    
-    # Main loop
-    while t<Max_iter:
-        for i in range(0,SearchAgents_no):
-            
-            # Check boundries
-                      
-            X[i,:]=np.clip(X[i,:], lb, ub)
-            
-            # fitness of locations
-            fitness=objf(X[i,:])
-            
-            # Update the location of Rabbit
-            if fitness<Rabbit_Energy: # Change this to > for maximization problem
-                Rabbit_Energy=fitness 
-                Rabbit_Location=X[i,:].copy() 
-            
-        E1=2*(1-(t/Max_iter)) # factor to show the decreaing energy of rabbit    
-        
-        # Update the location of Harris' hawks 
-        for i in range(0,SearchAgents_no):
-
-            E0=2*random.random()-1;  # -1<E0<1
-            Escaping_Energy=E1*(E0)  # escaping energy of rabbit Eq. (3) in the paper
-
-            # -------- Exploration phase Eq. (1) in paper -------------------
-
-            if abs(Escaping_Energy)>=1:
-                #Harris' hawks perch randomly based on 2 strategy:
-                q = random.random()
-                rand_Hawk_index = math.floor(SearchAgents_no*random.random())
-                X_rand = X[rand_Hawk_index, :]
-                if q<0.5:
-                    # perch based on other family members
-                    X[i,:]=X_rand-random.random()*abs(X_rand-2*random.random()*X[i,:])
-
-                elif q>=0.5:
-                    #perch on a random tall tree (random site inside group's home range)
-                    X[i,:]=(Rabbit_Location - X.mean(0))-random.random()*((ub-lb)*random.random()+lb)
-
-            # -------- Exploitation phase -------------------
-            elif abs(Escaping_Energy)<1:
-                #Attacking the rabbit using 4 strategies regarding the behavior of the rabbit
-
-                #phase 1: ----- surprise pounce (seven kills) ----------
-                #surprise pounce (seven kills): multiple, short rapid dives by different hawks
-
-                r=random.random() # probablity of each event
-                
-                if r>=0.5 and abs(Escaping_Energy)<0.5: # Hard besiege Eq. (6) in paper
-                    X[i,:]=(Rabbit_Location)-Escaping_Energy*abs(Rabbit_Location-X[i,:])
-
-                if r>=0.5 and abs(Escaping_Energy)>=0.5:  # Soft besiege Eq. (4) in paper
-                    Jump_strength=2*(1- random.random()); # random jump strength of the rabbit
-                    X[i,:]=(Rabbit_Location-X[i,:])-Escaping_Energy*abs(Jump_strength*Rabbit_Location-X[i,:])
-                
-                #phase 2: --------performing team rapid dives (leapfrog movements)----------
-
-                if r<0.5 and abs(Escaping_Energy)>=0.5: # Soft besiege Eq. (10) in paper
-                    #rabbit try to escape by many zigzag deceptive motions
-                    Jump_strength=2*(1-random.random())
-                    X1=Rabbit_Location-Escaping_Energy*abs(Jump_strength*Rabbit_Location-X[i,:]);
-
-                    if objf(X1)< fitness: # improved move?
-                        X[i,:] = X1.copy()
-                    else: # hawks perform levy-based short rapid dives around the rabbit
-                        X2=Rabbit_Location-Escaping_Energy*abs(Jump_strength*Rabbit_Location-X[i,:])+np.multiply(np.random.randn(dim),Levy(dim))
-                        if objf(X2)< fitness:
-                            X[i,:] = X2.copy()
-                if r<0.5 and abs(Escaping_Energy)<0.5:   # Hard besiege Eq. (11) in paper
-                     Jump_strength=2*(1-random.random())
-                     X1=Rabbit_Location-Escaping_Energy*abs(Jump_strength*Rabbit_Location-X.mean(0))
-                     
-                     if objf(X1)< fitness: # improved move?
-                        X[i,:] = X1.copy()
-                     else: # Perform levy-based short rapid dives around the rabbit
-                         X2=Rabbit_Location-Escaping_Energy*abs(Jump_strength*Rabbit_Location-X.mean(0))+np.multiply(np.random.randn(dim),Levy(dim))
-                         if objf(X2)< fitness:
-                            X[i,:] = X2.copy()
-                
-        convergence_curve[t]=Rabbit_Energy
-        if (t%1==0):
-               print(['At iteration '+ str(t)+ ' the best fitness is '+ str(Rabbit_Energy)])
-        t=t+1
-    
-    timerEnd=time.time()  
-    '''
-    s.endTime=time.strftime("%Y-%m-%d-%H-%M-%S")
-    s.executionTime=timerEnd-timerStart
-    s.convergence=convergence_curve
-    s.optimizer="HHO"   
-    s.objfname=objf.__name__
-    s.best =Rabbit_Energy 
-    s.bestIndividual = Rabbit_Location
-    '''
-
-    return s
 
 def Levy(dim):
     beta=1.5
@@ -171,23 +42,17 @@ def Levy(dim):
     return step
 
 
-
-
 def reward(cx, cy, x_car, y_car):
 
-  from scipy.interpolate import interp1d
-  interpolated_target_x = interp1d(np.arange(len(cx)), cx, kind='linear')
-  interpolated_target_y = interp1d(np.arange(len(cy)), cy, kind='linear')
-  # Generate new target_x and target_y with the same length as car_x and car_y
-  target_x = interpolated_target_x(np.linspace(0, len(cx) - 1, len(x_car)))
-  target_y = interpolated_target_y(np.linspace(0, len(cy) - 1, len(y_car)))
-  
-  CTE  = []
-  for i in range(len(target_x)):
-     CTE.append(np.sqrt((target_x[i] - x_car[i])**2 + (target_y[i] - y_car[i])**2))
-     
+  cxy_car=[cx, cy]
+  xy_car=[x_car, y_car]
+  cxy_car = np.array(cxy_car).T
 
-  fitness_rmse=np.sqrt ( (np.sum(CTE)) / len(CTE) )
+  cte_list = [np.sqrt((x - xy_car[0])**2 + (y - xy_car[1])**2) for x, y in cxy_car]
+  CTE = min(cte_list)
+ 
+
+  fitness_rmse= CTE / len(cte_list) 
   
 
   return fitness_rmse
@@ -214,12 +79,14 @@ class State:
         self.y = y                                                  # y (float): The y position of the vehicle.
         self.yaw = yaw                                              # yaw (float): The orientation of the vehicle.
         self.v = v                                                  # v (float): The velocity of the vehicle.
-
+        
+        # Positions of rear wheels
+        
         self.rear_x = self.x - ((WB / 2) * math.cos(self.yaw))      # rear_x (float): The x position of the rear axle.
-                                                                    # X = cos(ψ) [ref:1. pp:3. eq:2a]
+                                                                    # X =x + L*cos(ϴ) [ref:3. pp:3. eq:4]
 
         self.rear_y = self.y - ((WB / 2) * math.sin(self.yaw))      # rear_y (float): The y position of the rear axle.
-                                                                    # Y = sin(ψ) [ref:1. pp:3. eq:2b ]
+                                                                    #  Y =y + L* sin(ϴ) [ref:3. pp:3. eq:2b ]
     def update(self, a, delta):
 
         """ 
@@ -230,20 +97,19 @@ class State:
 
         self.x += self.v * math.cos(self.yaw) * dt                  # x (float): The x position of the vehicle. Updates the vehicle's x position by integrating its velocity (self.v) along the x-axis,
                                                                     # taking into account its orientation (self.yaw) to calculate the change in x position over the time interval dt.
-                                                                    # X = V * cos(ψ+β) [Lateral Vehicle Dynamics (ref:2 pp:24 eq:2.10)]
-                                                                    # vehicle slip angle β = arctan ((lf*tan(δr) + (lr*tan(δf))/(lf+lr)) [Lateral Vehicle Dynamics, (ref:2 pp:24 eq:2.13)]
-                                                                    # in the equation given above, vehicle slip angle β is assumed to be zero.
+                                                                    # X = V * cos(ψ+β) (ref:3 pp:3 eq:13)
+                                                                    # vehicle slip angle β = arctan ((lr*tan(δ))/(lf+lr)) (ref:3 pp:3 eq:16)
                                                                     
 
         self.y += self.v * math.sin(self.yaw) * dt                  # y (float): The y position of the vehicle. Similar to the previous line, 
                                                                     # this updates the vehicle's y position based on its velocity and orientation.
-                                                                    # Y = V * sin(ψ+β) [Lateral Vehicle Dynamics (ref:2 pp:24 eq:2.11)]
-                                                                    # vehicle slip angle β = arctan ((lf*tan(δr) + (lr*tan(δf))/(lf+lr)) [Lateral Vehicle Dynamics (ref:2 pp:24 eq:2.13)]
-                                                                    # in the equation given above, vehicle slip angle β is assumed to be zero.
+                                                                    # Y = V * sin(ϴ+β) [Lateral Vehicle Dynamics (ref:3 pp:3 eq:9)]
+                                                                    # vehicle slip angle β = arctan ((lr*tan(δ))/(lf+lr)) (ref:3 pp:3 eq:16)
+
 
         self.yaw += self.v / WB * math.tan(delta) * dt              # yaw (float): The orientation of the vehicle. Updates the vehicle's orientation (yaw) by integrating the change in yaw angle over time. 
                                                                     # The change in yaw angle is calculated based on the vehicle's velocity, the wheelbase (WB), and the calculated steering angle (delta).
-                                                                    # ψ = V * tan(δ) / L [Experimental Validation of a Kinematic Bicycle Model Predictice Control With Lateral Acceleration Consideration (2c)]
+                                                                    # ϴ = V * tan(δ) / L [ref:1 pp:3 eq:2c]
                                                                      
 
         self.v += a * dt                                            # v (float): The velocity of the vehicle. Updates the vehicle's velocity by integrating the acceleration (a) over time.
@@ -253,11 +119,12 @@ class State:
         self.rear_x = self.x - ((WB / 2) * math.cos(self.yaw))      # rear_x (float): The x position of the rear axle. Updates the x position of the rear axle based on the updated vehicle position and yaw angle. 
                                                                     # self.x is the x coordinate of the vehicle's center of gravity, and WB is the wheelbase.
                                                                     # This is used for determining the position of the rear of the vehicle.
-                                                                    # X = cos(ψ) [Experimental Validation of a Kinematic Bicycle Model Predictice Control With Lateral Acceleration Consideration ]
+                                                                    # X = cos(ϴ) [ref:3. pp:3. eq:8]
+
 
         self.rear_y = self.y - ((WB / 2) * math.sin(self.yaw))      # rear_y (float): The y position of the rear axle.Similar to the previous line,
                                                                     # this updates the y position of the rear axle based on the updated vehicle position and yaw angle.
-                                                                    # Y = sin(ψ) [Experimental Validation of a Kinematic Bicycle Model Predictice Control With Lateral Acceleration Consideration ]
+                                                                    # Y = sin(ϴ) [ref:3. pp:3. eq:9]
 
     def calc_distance(self, point_x, point_y):
         dx = self.rear_x - point_x                                  # dx (float): The distance between the rear axle and the given point along the x-axis.
@@ -322,6 +189,9 @@ class TargetCourse:                                                 # This class
             distance_this_index = state.calc_distance(self.cx[ind], 
                                                       self.cy[ind])             # distance_this_index (float): The distance between the vehicle's rear axle and the point on the target course at the given index.
             while True: 
+                if ind+1>=len(self.cx):
+                   print('break girdi')
+                   break
                 distance_next_index = state.calc_distance(self.cx[ind + 1],
                                                           self.cy[ind + 1])     # distance_next_index (float): The distance between the vehicle's rear axle and the point on the target course at the next index.
                 if distance_this_index < distance_next_index: 
@@ -398,14 +268,14 @@ def pure_pursuit_steer_control(state, trajectory, pind,lf_algo):                
         ty = trajectory.cy[-1]
         ind = len(trajectory.cx) - 1
 
-    alpha = -math.atan2(-ty + state.rear_y, -tx + state.rear_x) + state.yaw  # [Development of lateral control system for autonomous vehicle based on adaptive pure pursuit algorithm (ref:6 pp:3 eq:6)*]
+    alpha = -math.atan2(-ty + state.rear_y, -tx + state.rear_x) + state.yaw  # [ref:4 pp:3 eq:1]
     """ 
         Alpha Calculation: 
             This line calculates the angle (alpha) between the line connecting the vehicle's rear axle and the target point (tx, ty) and the current orientation of the vehicle (state.yaw).
             It uses the math.atan2 function to ensure the angle is calculated within the correct range.
     """
 
-    delta = math.atan2(2.0 * WB * math.sin(alpha) / Lf, 1.0) # δ = arctan(2 * L * sin(α) / ld) [Automatic Steering Methods for Autonomous Automobile Path Tracking (ref:5 pp:17 eq:3)]
+    delta = math.atan2(2.0 * WB * math.sin(alpha) / Lf, 1.0) # δ = arctan(2 * L * sin(α) / ld) [Automatic Steering Methods for Autonomous Automobile Path Tracking (ref:2 pp:17 eq:3)]
         # ".1.0 is just a scaling factor to make delta smaller. "
     """
         Steering Angle Calculation:
@@ -513,14 +383,14 @@ def main():
     
     
     
-    state = State(x=-0.0, y=-3.0, yaw=0.0, v=0.0)               # state (State): The vehicle's initial state. The vehicle is initialized at the origin with zero velocity and orientation.
+    state = State(x=cx[0], y=cy[0], yaw=0.0, v=0.0)               # state (State): The vehicle's initial state. The vehicle is initialized at the origin with zero velocity and orientation.
 
     lastIndex = len(cx) - 1                                     # lastIndex (int): The index of the last point on the target course.
     time = 0.0                                                  # time (float): The current time in the simulation.
     states = States()                                           # states (States): The vehicle's states at each time step.
     states.append(time, state)                                  # This line appends the initial state to the states object.
     target_course = TargetCourse(cx, cy)                        # target_course (TargetCourse): The target course that the vehicle should follow.
-    lf=2.5
+    lf=2.5 # initial lookahead distance
     target_ind, _ = target_course.search_target_index(state,lf)    # target_ind (int): The index of the target point on the target course that the vehicle should follow.
     t=0 # iteration
     start = timeit.default_timer()
@@ -535,6 +405,7 @@ def main():
         time += dt
         states.append(time, state)
          
+        print("state-x:", state.x)
         
         if t==0: # initialization
             #fitness=reward(cx, cy, states.x, states.y)
@@ -546,9 +417,8 @@ def main():
                 di, target_ind = pure_pursuit_steer_control(            # di (float): The steering angle required to follow the target point on the trajectory.
                 state, target_course, target_ind,lf)                   # target_ind (int): The index of the target point on the target course that the vehicle should follow.                                   
                 state.update(ai, di) 
-                states.x[-1]=state.x
-                states.y[-1]=state.y
-                fitness=reward(cx, cy, states.x, states.y) 
+                
+                fitness=reward(cx, cy, state.x, state.y) # cx, cy --> target trajectory
             
                 # fitness of locations
                 #fitness=objf(X[i,:])
@@ -611,9 +481,7 @@ def main():
                     di, target_ind = pure_pursuit_steer_control(            # di (float): The steering angle required to follow the target point on the trajectory.
                     state, target_course, target_ind,lf)                   # target_ind (int): The index of the target point on the target course that the vehicle should follow.                                   
                     state.update(ai, di) 
-                    states.x[-1]=state.x
-                    states.y[-1]=state.y
-                    fitness_X1=reward(cx, cy, states.x, states.y) 
+                    fitness_X1=reward(cx, cy, state.x, state.y) 
 
 
                     if fitness_X1< fitness: # improved move?
@@ -628,9 +496,7 @@ def main():
                         di, target_ind = pure_pursuit_steer_control(            # di (float): The steering angle required to follow the target point on the trajectory.
                         state, target_course, target_ind,lf)                   # target_ind (int): The index of the target point on the target course that the vehicle should follow.                                   
                         state.update(ai, di) 
-                        states.x[-1]=state.x
-                        states.y[-1]=state.y
-                        fitness_X2=reward(cx, cy, states.x, states.y) 
+                        fitness_X2=reward(cx, cy, state.x, state.y) 
                         
                         if fitness_X2< fitness:
                             X[i,:] = X2.copy()
@@ -643,9 +509,7 @@ def main():
                      di, target_ind = pure_pursuit_steer_control(            # di (float): The steering angle required to follow the target point on the trajectory.
                      state, target_course, target_ind,lf)                   # target_ind (int): The index of the target point on the target course that the vehicle should follow.                                   
                      state.update(ai, di) 
-                     states.x[-1]=state.x
-                     states.y[-1]=state.y
-                     fitness_X1=reward(cx, cy, states.x, states.y) 
+                     fitness_X1=reward(cx, cy, state.x, state.y) 
                      if fitness_X1< fitness: # improved move?
                         X[i,:] = X1.copy()
                         X_best= X[i,:]
@@ -658,12 +522,10 @@ def main():
                          di, target_ind = pure_pursuit_steer_control(            # di (float): The steering angle required to follow the target point on the trajectory.
                          state, target_course, target_ind,lf)                   # target_ind (int): The index of the target point on the target course that the vehicle should follow.                                   
                          state.update(ai, di) 
-                         states.x[-1]=state.x
-                         states.y[-1]=state.y
-                         fitness_X2=reward(cx, cy, states.x, states.y) 
+                         fitness_X2=reward(cx, cy, state.x, state.y) 
                          
                          if fitness_X2< fitness:
-                            X[i,:] = X2.copy(),
+                            X[i,:] = X2.copy()
                             X_best= X[i,:]
                             Fitness_best=fitness_X2
                 
@@ -708,7 +570,7 @@ def main():
     estimated_time=stop - start
     # Test
     assert lastIndex >= target_ind, "Cannot goal"
-    states.y[0]=0
+    #states.y[0]=0
     plt.plot(cx, cy, ".r", label="Target trajectory")
     plt.plot(states.x, states.y, "-b", label="Found trajectory")
     plt.legend()
