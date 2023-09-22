@@ -585,7 +585,7 @@ def sac(episodes):
                 print('stop')
             
             
-            if  episode_steps < 2: # To increase exploration, 10 orj
+            if  episode_steps < 10: # To increase exploration, 10 orj
                 population_size=1
                 dim=1
                 action=np.random.uniform(0,1,(population_size,dim)) *(ub-lb)+lb #action=lf (look ahead distance)
@@ -595,6 +595,7 @@ def sac(episodes):
 
             else:
                 action = agent.act(state_RL) # to sample the actions by Gaussian 
+                lf=action[0]
             print(action)
             state_control.update(p, steering_angle)
             times += dt
@@ -699,7 +700,7 @@ for i in range(num_of_test_episodes):
     state_RL=[CTE, steering_angle, lf] 
     local_reward = 0
     done = False
-    reward_previous=0
+    reward_previous=-1000
     episode_steps = 0
     while not done:
         episode_steps+=1 
@@ -710,11 +711,13 @@ for i in range(num_of_test_episodes):
         p= proportional_control(target_speed, state_control.v) 
         steering_angle, target_ind = pure_pursuit_steer_control(state_control, target_course, target_ind,lf)             
         CTE=cross_track_error(cx, cy, state_control.x, state_control.y)
+        lf=action[0]
         state_RL_next=[CTE,steering_angle,lf] 
         reward, done=reward_calculate(state_RL_next)
         if reward>reward_previous:
-            best_lookahead=action
+            best_lookahead=lf
             best_reward=reward
+            reward_previous=reward
         #state, r, done, _ = new_env.step(action)
         local_reward += reward
         if episode_steps == max_episode_steps: # if the current episode has reached its maximum allowed steps
