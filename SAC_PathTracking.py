@@ -1,5 +1,3 @@
-from gym import make
-#import pybullet_envs
 import numpy as np
 import random
 import torch
@@ -640,7 +638,7 @@ def sac(episodes):
     return reward_list, avg_scores_list
 
 
-# action: heading angle
+# action: lookahead distance
 action_size = 1
 print(f'dim of each action = {action_size}')
 # state: cross-track error, steering angle, lookahead distance
