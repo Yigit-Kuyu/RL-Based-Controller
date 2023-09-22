@@ -588,12 +588,19 @@ def sac(episodes):
                 dim=1
                 action=np.random.uniform(0,1,(population_size,dim)) *(ub-lb)+lb #action=lf (look ahead distance)
                 lf=action[0][0]
-                action=action[0]
+                #action=action[0]
+                lf= np.maximum(lb, lf)  # lower boundary check
+                lf = np.minimum(ub, lf )  # Upper bound check
+                action=[lf]
                 #action = env.action_space.sample() # Orj
 
             else:
                 action = agent.act(state_RL) # to sample the actions by Gaussian 
                 lf=action[0]
+                lf= np.maximum(lb, lf)  # lower boundary check
+                lf = np.minimum(ub, lf )  # Upper bound check
+                action=[lf]
+            
             print(action)
             state_control.update(p, steering_angle)
             times += dt
