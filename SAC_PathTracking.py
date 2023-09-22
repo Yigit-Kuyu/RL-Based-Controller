@@ -1,68 +1,30 @@
-"""
-
-Path tracking simulation with pure pursuit steering and PID speed control.
-
-References :
-
-    1)    Experimental Validation of a Kinematic Bicycle Model Predictice Control With Lateral Acceleration Consideration : IFAC PapersOnLine 52-8 (2019) 289–294 
-    2)    Automatic Steering Methods for Autonomous Automobile Path Tracking : CMU-RI-TR-09-08  
-    3)    D. S. Lal, A. Vivek and G. Selvaraj, "Lateral control of an autonomous vehicle based on Pure Pursuit algorithm," 2017 International Conference on Technological Advancements in Power and Energy ( TAP Energy), Kollam, India, 2017, pp. 1-8, doi: 10.1109/TAPENERGY.2017.8397361.  
-    4)    R. Wang, Y. Li, J. Fan, T. Wang and X. Chen, "A Novel Pure Pursuit Algorithm for Autonomous Vehicles Based on Salp Swarm Algorithm and Velocity Controller," in IEEE Access, vol. 8, pp. 166525-166540, 2020, doi: 10.1109/ACCESS.2020.3023071.
-
-
-"""
+from gym import make
+#import pybullet_envs
 import numpy as np
-import math
-import matplotlib.pyplot as plt
-import time
 import random
-import timeit
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
+import copy
+import time
+from collections import deque
+from torch.distributions.normal import Normal
+import matplotlib.pyplot as plt
+import math
 
 
-
+WB = 0.1    # WB: The wheelbase of the vehicle, which is the distance between the front and rear axles.                                                 [Pure Pursuit]
+dt = 0.1    # dt: The time step used in the simulation, representing the interval at which updates are calculated. # 0.1                                [PID Speed Control]
 k = 0.1     # k: This is the look forward gain, which scales the look-ahead distance based on the vehicle's velocity.                                   [Pure Pursuit]
 Lfc = 2.5   # Lfc: The look-ahead distance, which determines how far ahead the vehicle should consider when choosing the target point on the path.      [Pure Pursuit]
-WB = 0.1    # WB: The wheelbase of the vehicle, which is the distance between the front and rear axles.                                                 [Pure Pursuit]
-
 Kp = 1.0    # Kp: The speed proportional gain, used in the proportional control law to adjust the acceleration.                                         [PID Speed Control]
-Ki = 0.1    # Ki: The speed integral gain, used in the integral control law to adjust the acceleration.                                                 [PID Speed Control]
-Kd = 0.01   # Kd: The speed derivative gain, used in the derivative control law to adjust the acceleration.                                             [PID Speed Control]
-dt = 0.1    # dt: The time step used in the simulation, representing the interval at which updates are calculated. # 0.1                                    [PID Speed Control]
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 
-
-def Levy(dim):
-    beta=1.5
-    sigma=(math.gamma(1+beta)*math.sin(math.pi*beta/2)/(math.gamma((1+beta)/2)*beta*2**((beta-1)/2)))**(1/beta) 
-    u= 0.01*np.random.randn(dim)*sigma
-    v = np.random.randn(dim)
-    zz = np.power(np.absolute(v),(1/beta))
-    step = np.divide(u,zz)
-    return step
-
-
-def reward(cx, cy, x_car, y_car):
-
-  cxy_car=[cx, cy]
-  xy_car=[x_car, y_car]
-  cxy_car = np.array(cxy_car).T
-
-  cte_list = [np.sqrt((x - xy_car[0])**2 + (y - xy_car[1])**2) for x, y in cxy_car]
-  CTE = min(cte_list)
- 
-
-  fitness_rmse= CTE / len(cte_list) 
-  
-
-  return fitness_rmse
-
-
-
-show_animation = True
-
-
-class State:
+class InitialState_Update:
 
     """
 
@@ -124,15 +86,14 @@ class State:
 
         self.rear_y = self.y - ((WB / 2) * math.sin(self.yaw))      # rear_y (float): The y position of the rear axle.Similar to the previous line,
                                                                     # this updates the y position of the rear axle based on the updated vehicle position and yaw angle.
-                                                                    # Y = sin(ϴ) [ref:3. pp:3. eq:9]
-
+    
+    
     def calc_distance(self, point_x, point_y):
         dx = self.rear_x - point_x                                  # dx (float): The distance between the rear axle and the given point along the x-axis.
         dy = self.rear_y - point_y                                  # dy (float): The distance between the rear axle and the given point along the y-axis.
-        return math.hypot(dx, dy)                                   # Returns the distance between the rear axle and the given point using the Pythagorean theorem. (c = sqrt(a^2 + b^2)
+        return math.hypot(dx, dy)                                                                    # Y = sin(ϴ) [ref:3. pp:3. eq:9]
 
-
-class States:
+class StateSave:
 
     def __init__(self ):                                            # This class is used to store the vehicle's state at each time step.
         self.x = []                                                 # x (list): A list of the vehicle's x position at each time step.
@@ -141,7 +102,7 @@ class States:
         self.v = []                                                 # v (list): A list of the vehicle's velocity at each time step.
         self.t = []                                                 # t (list): A list of the time at each time step.
 
-    def append(self, t, state):                                     # This method is used to append the vehicle's state at a given time step to the corresponding lists.
+    def append_all(self, t, state):                                     # This method is used to append the vehicle's state at a given time step to the corresponding lists.
         self.x.append(state.x)                                      # t (float): The time at the given time step.
         self.y.append(state.y)                                      # state (State): The vehicle's state at the given time step.
         self.yaw.append(state.yaw)                                  # This method is used to append the vehicle's state at a given time step to the corresponding lists.
@@ -149,10 +110,74 @@ class States:
         self.t.append(t)                                            # This method is used to append the vehicle's state at a given time step to the corresponding lists.
 
 
-def proportional_control(target, current):                          # This function calculates the acceleration required to adjust the vehicle's velocity to the target velocity.
-    a = Kp * (target - current)                                     # target (float): The target velocity.
 
-    return a                                                        # current (float): The current velocity.
+
+
+def pure_pursuit_steer_control(state, trajectory, pind,lf_algo):                    # The pure_pursuit_steer_control function implements the pure pursuit steering control algorithm. This algorithm determines the steering angle (delta) that the vehicle should apply to follow a predefined trajectory accurately. 
+   
+    ind, Lf = trajectory.search_target_index(state,lf_algo)
+
+    """ 
+        Target Point Index Calculation:
+        This line calls the search_target_index method from the trajectory object to find the index of the target point on the trajectory that the vehicle should aim to follow.
+        It also obtains the calculated look-ahead distance Lf for the pure pursuit algorithm.
+
+    """
+
+    if pind >= ind:
+        ind = pind
+        """ 
+            Index Update and Target Point Coordinates:
+            This condition ensures that if the input pind (previously provided index) is greater than or equal to the index calculated from the search_target_index, the calculated index (ind) is updated to match pind.
+            This allows the algorithm to handle situations where specific points on the trajectory need to be followed.
+
+        """
+    if ind < len(trajectory.cx):
+        tx = trajectory.cx[ind]
+        ty = trajectory.cy[ind]
+
+        """ 
+            If the calculated index (ind) is within the range of the trajectory points, the x and y coordinates of the target point are obtained (tx, ty) based on that index.
+            If the calculated index exceeds the available trajectory points, it means the vehicle is approaching the end of the trajectory. In this case, the target point is set to the last point of the trajectory (tx, ty).
+        """    
+    else:  # toward goal
+        tx = trajectory.cx[-1]
+        ty = trajectory.cy[-1]
+        ind = len(trajectory.cx) - 1
+
+    alpha = -math.atan2(-ty + state.rear_y, -tx + state.rear_x) + state.yaw  # [ref:4 pp:3 eq:1]
+    """ 
+        Alpha Calculation: 
+            This line calculates the angle (alpha) between the line connecting the vehicle's rear axle and the target point (tx, ty) and the current orientation of the vehicle (state.yaw).
+            It uses the math.atan2 function to ensure the angle is calculated within the correct range.
+    """
+
+    delta = math.atan2(2.0 * WB * math.sin(alpha) / Lf, 1.0) # δ = arctan(2 * L * sin(α) / ld) [Automatic Steering Methods for Autonomous Automobile Path Tracking (ref:2 pp:17 eq:3)]
+        # ".1.0 is just a scaling factor to make delta smaller. "
+    """
+        Steering Angle Calculation:
+            This line calculates the steering angle (delta) that the vehicle should apply to follow the target point.
+            It uses the calculated angle alpha and the look-ahead distance Lf to determine the appropriate steering angle based on the pure pursuit algorithm.
+            The formula incorporates the vehicle's wheelbase (WB) to convert the angle into a steering angle.
+    """
+
+    return delta, ind
+    """ 
+        Return Results:
+            The function returns the calculated steering angle delta and the index of the target point (ind) to be used in the main simulation loop.
+            
+    """
+""" 
+    The aim of this section is to calculate the appropriate steering angle for the vehicle to follow the target point on the trajectory.
+    The pure pursuit algorithm works by determining the angle required to point the vehicle's front wheels toward the target point while considering the vehicle's kinematics and geometry. 
+    This ensures accurate tracking of the desired trajectory.
+"""
+
+
+def proportional_control(target, current):                          # This function calculates the acceleration required to adjust the vehicle's velocity to the target velocity.
+    p = Kp * (target - current)                                     # target (float): The target velocity.
+
+    return p  
 
 
 class TargetCourse:                                                 # This class represents the target course, which is the desired trajectory that the vehicle should follow.
@@ -226,388 +251,500 @@ class TargetCourse:                                                 # This class
             """
 
         return ind, Lf
-        """ 
-        The method returns the index of the target point (ind) and the calculated look-ahead distance (Lf) to be used in other parts of the simulation, specifically in the pure pursuit steering algorithm.
 
-        """
-    """ 
-        Overall, the aim of this method is to determine the index of the target point on the trajectory that the vehicle should aim to follow. 
-        It accounts for the vehicle's current position, orientation, and desired look-ahead distance to ensure accurate tracking of the trajectory. 
-        The method balances efficiency (by using the previously found nearest point) and accuracy (by iteratively searching for the next appropriate point within the look-ahead distance).
-    """
+def cross_track_error(cx, cy, x_car, y_car):
 
-def pure_pursuit_steer_control(state, trajectory, pind,lf_algo):                    # The pure_pursuit_steer_control function implements the pure pursuit steering control algorithm. This algorithm determines the steering angle (delta) that the vehicle should apply to follow a predefined trajectory accurately. 
-   
-    ind, Lf = trajectory.search_target_index(state,lf_algo)
+  cxy_car=[cx, cy]
+  xy_car=[x_car, y_car]
+  cxy_car = np.array(cxy_car).T
 
-    """ 
-        Target Point Index Calculation:
-        This line calls the search_target_index method from the trajectory object to find the index of the target point on the trajectory that the vehicle should aim to follow.
-        It also obtains the calculated look-ahead distance Lf for the pure pursuit algorithm.
+  cte_list = [np.sqrt((x - xy_car[0])**2 + (y - xy_car[1])**2) for x, y in cxy_car]
+  CTE = min(cte_list)
 
-    """
+  return CTE
 
-    if pind >= ind:
-        ind = pind
-        """ 
-            Index Update and Target Point Coordinates:
-            This condition ensures that if the input pind (previously provided index) is greater than or equal to the index calculated from the search_target_index, the calculated index (ind) is updated to match pind.
-            This allows the algorithm to handle situations where specific points on the trajectory need to be followed.
+def reward_calculate(state_input):
+  CTE=state_input[0]
+  lf=state_input[1]
+  str=state_input[2]
 
-        """
-    if ind < len(trajectory.cx):
-        tx = trajectory.cx[ind]
-        ty = trajectory.cy[ind]
+  R=-0.005*lf+-0.005*str-0.5*(CTE**2)-0.05*abs(CTE)-0.1*dt
 
-        """ 
-            If the calculated index (ind) is within the range of the trajectory points, the x and y coordinates of the target point are obtained (tx, ty) based on that index.
-            If the calculated index exceeds the available trajectory points, it means the vehicle is approaching the end of the trajectory. In this case, the target point is set to the last point of the trajectory (tx, ty).
-        """    
-    else:  # toward goal
-        tx = trajectory.cx[-1]
-        ty = trajectory.cy[-1]
-        ind = len(trajectory.cx) - 1
+  
 
-    alpha = -math.atan2(-ty + state.rear_y, -tx + state.rear_x) + state.yaw  # [ref:4 pp:3 eq:1]
-    """ 
-        Alpha Calculation: 
-            This line calculates the angle (alpha) between the line connecting the vehicle's rear axle and the target point (tx, ty) and the current orientation of the vehicle (state.yaw).
-            It uses the math.atan2 function to ensure the angle is calculated within the correct range.
-    """
+  if CTE>2:
+      done=True
+  else:
+      done=False
 
-    delta = math.atan2(2.0 * WB * math.sin(alpha) / Lf, 1.0) # δ = arctan(2 * L * sin(α) / ld) [Automatic Steering Methods for Autonomous Automobile Path Tracking (ref:2 pp:17 eq:3)]
-        # ".1.0 is just a scaling factor to make delta smaller. "
-    """
-        Steering Angle Calculation:
-            This line calculates the steering angle (delta) that the vehicle should apply to follow the target point.
-            It uses the calculated angle alpha and the look-ahead distance Lf to determine the appropriate steering angle based on the pure pursuit algorithm.
-            The formula incorporates the vehicle's wheelbase (WB) to convert the angle into a steering angle.
-    """
-
-    return delta, ind
-    """ 
-        Return Results:
-            The function returns the calculated steering angle delta and the index of the target point (ind) to be used in the main simulation loop.
-            
-    """
-""" 
-    The aim of this section is to calculate the appropriate steering angle for the vehicle to follow the target point on the trajectory.
-    The pure pursuit algorithm works by determining the angle required to point the vehicle's front wheels toward the target point while considering the vehicle's kinematics and geometry. 
-    This ensures accurate tracking of the desired trajectory.
-"""
-
-
-def plot_arrow(x, y, yaw, length=1.0, width=0.5, fc="r", ec="k"):
-    """
-        Function Parameters:
-            x and y: The coordinates of the arrow's starting point (vehicle's position).
-            yaw: The orientation angle of the arrow (vehicle's orientation).
-            length: The length of the arrow representing the vehicle.
-            width: The width of the arrow.
-            fc (facecolor): The fill color of the arrow.
-            ec (edgecolor): The edge color of the arrow.
-
-    """
-
-    if not isinstance(x, float):
-        for ix, iy, iyaw in zip(x, y, yaw):
-            plot_arrow(ix, iy, iyaw)
-
-            """ 
-                Arrow Plotting for Single Point:
-                    This condition checks if the provided x coordinate is a single value (i.e., not a list or array). If it's not a single value, it indicates that multiple points are being plotted.
-                    If the coordinates are in lists or arrays (multiple points), the function recursively calls itself for each point in the lists (x, y, yaw) to create individual arrow plots.
-            """
-    else:
-        plt.arrow(x, y, length * math.cos(yaw), length * math.sin(yaw),
-                  fc=fc, ec=ec, head_width=width, head_length=width)
-        plt.plot(x, y)
-
-        """ 
-            Arrow Plotting for Multiple Points:
-                If the provided x coordinate is a single value, this part of the function is executed to plot a single arrow.
-                plt.arrow is used to create the arrow. It takes the starting point (x, y), the change in x (length * math.cos(yaw)) and y (length * math.sin(yaw)) coordinates based on the arrow's orientation.
-                The fc and ec parameters define the fill and edge colors of the arrow.
-                head_width and head_length determine the size of the arrowhead.
-                plt.plot(x, y) is used to mark the starting point of the arrow with a point on the plot.
-        """
-    """
-        In summary, the aim of this function is to visualize the vehicle's position and orientation on a matplotlib plot.
-        It achieves this by creating arrow representations that depict the vehicle's movement and direction.
-        It's a crucial part of the simulation for visually tracking the vehicle's path and orientation.
-
-    """
+  return R, done
 
 
 
-def main():
+
+
+# Use Xavier initialization for the weights and initializes the biases to zero for linear layers.
+# It sets the weights to values drawn from a Gaussian distribution with mean 0 and variance
+def weights_init_(m):
+    if isinstance(m, nn.Linear):
+        torch.nn.init.xavier_uniform_(m.weight, gain=1)
+        torch.nn.init.constant_(m.bias, 0)
+
+
+
+class ValueNetwork(nn.Module): # state-Value network
+    def __init__(self, num_inputs, hidden_dim):
+        super(ValueNetwork, self).__init__()
+
+        self.linear1 = nn.Linear(num_inputs, hidden_dim)
+        self.linear2 = nn.Linear(hidden_dim, hidden_dim)
+        self.linear3 = nn.Linear(hidden_dim, 1)
+
+        self.apply(weights_init_) # Optional
+
+
+    def forward(self, state):
+        x = F.relu(self.linear1(state))
+        x = F.relu(self.linear2(x))
+        x = self.linear3(x)
+        return x
+
+
+# stocastic policy
+class Actor(nn.Module):
+    def __init__(self, state_size, action_size, hidden_dim, high, low):
+        super(Actor, self).__init__()
+        self.linear1 = nn.Linear(state_size, hidden_dim)
+        self.linear2 = nn.Linear(hidden_dim, hidden_dim)
+        
+        self.mean = nn.Linear(hidden_dim, action_size)
+        self.log_std = nn.Linear(hidden_dim, action_size)
+        
+        self.high = torch.tensor(high).to(device)
+        self.low = torch.tensor(low).to(device)
+        
+        self.apply(weights_init_) # Optional
+        
+        # Action rescaling
+        self.action_scale = torch.tensor((high - low) / 2.).to(device)
+        self.action_bias = torch.tensor((high + low) / 2.).to(device)
     
+    def forward(self, state):
+        log_std_min=-20
+        log_std_max=2
+        x = state
+        x = F.relu(self.linear1(x))
+        x = F.relu(self.linear2(x))
+        m = self.mean(x)
+        s = self.log_std(x)
+        s = torch.clamp(s, min = log_std_min, max = log_std_max)
+        return m, s
+    
+    def sample(self, state):
+        noise=1e-6
+        m, s = self.forward(state) 
+        std = s.exp()
+        normal = Normal(m, std)
+        
+        
+        ## Reparameterization (https://spinningup.openai.com/en/latest/algorithms/sac.html)
+        # There are two sample functions in normal distributions one gives you normal sample ( .sample() ),
+        # other one gives you a sample + some noise ( .rsample() )
+        a = normal.rsample() # This is for the reparamitization
+        tanh = torch.tanh(a)
+        action = tanh * self.action_scale + self.action_bias
+        
+        logp = normal.log_prob(a)
+        # Comes from the appendix C of the original paper for scaling of the action:
+        logp =logp-torch.log(self.action_scale * (1 - tanh.pow(2)) + noise)
+        logp = logp.sum(1, keepdim=True)
+        
+        return action, logp
+
+
+# Action-Value
+class Critic(nn.Module):
+    def __init__(self, state_dim, action_dim, hidden_dim):
+        super(Critic, self).__init__()
+
+        # Critic-1: Q1 
+        self.linear1 = nn.Linear(state_dim + action_dim, hidden_dim)
+        self.linear2 = nn.Linear(hidden_dim, hidden_dim)
+        self.linear3 = nn.Linear(hidden_dim, 1)
+
+        # Critic-2: Q2 
+        self.linear4 = nn.Linear(state_dim + action_dim, hidden_dim)
+        self.linear5 = nn.Linear(hidden_dim, hidden_dim)
+        self.linear6 = nn.Linear(hidden_dim, 1)
+
+        self.apply(weights_init_) # OpReplayMemorytional
+
+
+    def forward(self, state, action):
+        state_action = torch.cat([state, action], 1)
+
+        q1 = F.relu(self.linear1(state_action))
+        q1 = F.relu(self.linear2(q1))
+        q1 = self.linear3(q1)
+
+        q2 = F.relu(self.linear4(state_action))
+        q2 = F.relu(self.linear5(q2))
+        q2 = self.linear6(q2)
+        return q1, q2
+    
+# Buffer
+class ReplayMemory:
+    def __init__(self, memory_capacity, batch_size):
+        self.memory_capacity = memory_capacity
+        self.batch_size = batch_size
+        self.memory = []
+        self.position = 0
+
+    def push(self, element):
+        if len(self.memory) < self.memory_capacity:
+            self.memory.append(None)
+        self.memory[self.position] = element
+        self.position = (self.position + 1) % self.memory_capacity
+
+    def sample(self):
+        return list(zip(*random.sample(self.memory, self.batch_size)))
+
+    def __len__(self):
+        return len(self.memory)
+
+
+class Sac_agent:
+    def __init__(self, state_size, action_size, hidden_dim, high, low, memory_capacity, batch_size,
+                 gamma, tau,num_updates, policy_freq, alpha):
+        
+         # Actor Network 
+        self.actor = Actor(state_size, action_size,hidden_dim, high, low).to(device)
+        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=1e-4)
+        
+
+        # Critic Network and Target Network
+        self.critic = Critic(state_size, action_size, hidden_dim).to(device)   
+        
+        self.critic_target = Critic(state_size, action_size, hidden_dim).to(device)        
+        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=1e-4)
+        
+        # copy weights
+        self.hard_update(self.critic_target, self.critic)
+        
+        # Value network and Target Network
+        self.value = ValueNetwork(state_size, hidden_dim).to(device)
+        self.value_optim =optim.Adam(self.value.parameters(), lr=1e-4)
+        self.target_value = ValueNetwork(state_size, hidden_dim).to(device)
+        
+        # copy weights
+        self.hard_update(self.target_value, self.value)
+        
+        self.state_size = state_size
+        self.action_size = action_size
+        
+        self.memory = ReplayMemory(memory_capacity, batch_size)
+        self.gamma = gamma
+        self.tau = tau
+        self.num_updates = num_updates
+        self.iters = 0
+        self.policy_freq=policy_freq
+        
+        ## For Dynamic Adjustment of the Parameter alpha (entropy coefficient) according to Gaussion policy (stochastic):
+        self.target_entropy = -float(self.action_size) # Target Entropy = −dim(A) (e.g. , -6 for HalfCheetah-v2, -11 for Reacher-v2)
+        self.log_alpha = torch.zeros(1, requires_grad=True, device = device)
+        self.alpha_optimizer = optim.Adam([self.log_alpha], lr=1e-4)
+        self.alpha = alpha
+        
+        
+    def hard_update(self, target, network):
+        for target_param, param in zip(target.parameters(), network.parameters()):
+            target_param.data.copy_(param.data)
+            
+    def soft_update(self, target, network):
+        for target_param, param in zip(target.parameters(), network.parameters()):
+            target_param.data.copy_(self.tau*param.data + (1-self.tau)*target_param.data)
+            
+    def learn(self, batch):
+        for _ in range(self.num_updates):                
+            state, action, reward, next_state, mask = batch
+
+            state = torch.tensor(state).to(device).float()
+            next_state = torch.tensor(next_state).to(device).float()
+            reward = torch.tensor(reward).to(device).float().unsqueeze(1)
+            action = torch.tensor(action).to(device).float()
+            mask = torch.tensor(mask).to(device).int().unsqueeze(1)
+                         
+            value_current=self.value(state)
+            value_next=self.target_value(next_state)
+            act_next, logp_next = self.actor.sample(next_state)
+                
+            ## Compute targets
+            Q_target_main = reward + self.gamma*mask*value_next # Eq.8 of the original paper
+
+            ## Update Value Network
+            Q_target1, Q_target2 = self.critic_target(next_state, act_next) 
+            min_Q = torch.min(Q_target1, Q_target2)
+            value_difference = min_Q - logp_next # substract min Q value from the policy's log probability of slelecting that action
+            value_loss = 0.5 * F.mse_loss(value_current, value_difference) # Eq.5 from the paper
+            # Gradient steps 
+            self.value_optim.zero_grad()
+            value_loss.backward(retain_graph=True)
+            self.value_optim.step()
+            
+            ## Update Critic Network       
+            critic_1, critic_2 = self.critic(state, action)
+            critic_loss1 = 0.5*F.mse_loss(critic_1, Q_target_main) # Eq. 7 of the original paper
+            critic_loss2 = 0.5* F.mse_loss(critic_2, Q_target_main) # Eq. 7 of the original paper
+            total_critic_loss=critic_loss1+ critic_loss2  
+            # Gradient steps
+            self.critic_optimizer.zero_grad()
+            total_critic_loss.backward() 
+            self.critic_optimizer.step() 
+
+            ## Update Actor Network with Entropy Regularized (look at the link for entropy regularization)
+            act_pi, log_pi = self.actor.sample(state) # Reparameterize sampling
+            Q1_pi, Q2_pi = self.critic(state, act_pi)
+            min_Q_pi = torch.min(Q1_pi, Q2_pi)
+            actor_loss =-(min_Q_pi-self.alpha*log_pi ).mean() # For minimization
+            # Gradient steps
+            self.actor_optimizer.zero_grad()
+            actor_loss.backward()
+            self.actor_optimizer.step()
+            
+            ## Dynamic adjustment of the Entropy Parameter alpha (look at the link for entropy regularization)
+            alpha_loss = (-self.log_alpha * (log_pi.detach()) - self.log_alpha* self.target_entropy).mean()
+            self.alpha_optimizer.zero_grad()
+            alpha_loss.backward()
+            self.alpha_optimizer.step()
+            self.alpha = self.log_alpha.exp()
+            
+            ## Soft Update Target Networks using Polyak Averaging
+            if (self.iters % self.policy_freq == 0):         
+                self.soft_update(self.critic_target, self.critic)
+                self.soft_update(self.target_value, self.value)
+        
+    def act(self, state):
+        state =  torch.tensor(state).unsqueeze(0).to(device).float()
+        action, logp = self.actor.sample(state)
+        return action.cpu().data.numpy()[0]
+    
+    def step(self):
+        self.learn(self.memory.sample())
+        
+    def save(self):
+        torch.save(self.actor.state_dict(), "path_track_actor.pkl")
+        torch.save(self.critic.state_dict(), "path_track_critic.pkl")
+        
+
+def sac(episodes):
+    agent = Sac_agent(state_size = state_size, action_size = action_size, hidden_dim = hidden_dim, high = high, low = low, 
+                  memory_capacity = memory_capacity, batch_size = batch_size, gamma = gamma, tau = tau, 
+                  num_updates = num_updates, policy_freq =policy_freq, alpha = entropy_coef)
+    time_start = time.time()
+    reward_list = []
+    avg_score_deque = deque(maxlen = 100)
+    avg_scores_list = []
+    mean_reward = -20000
+    # Boundaries of the variable lookahead distance lf
+    lb=2
+    ub=5
+    
+    
+    target_speed = 10.0  
     cx = np.arange(0, 50, 0.5)                                  # cx (list): A list of the x coordinates of the target course.
     cy = [math.sin(ix / 5.0) * ix / 5.0 for ix in cx]           # cy (list): A list of the y coordinates of the target course.
     
-    #target_speed = 10.0 / 3.6                                   # target_speed (float): The target speed of the vehicle in m/s.
-    target_speed = 10.0 
-    T = 100   # 100                                                # T (float): The total simulation time in seconds.
-    
-    
-    plt.plot(cx, cy, ".r", label="Target trajectory")
-    
-    plt.legend()
-    #plt.xlabel("x[m]")
-    #plt.ylabel("y[m]")
-    plt.axis("equal")
-    plt.xlim((0,45))
-    plt.grid(True)
-    plt.show()
-    
-    
-    dim=1
-    SearchAgents_no=10
-    lb=2
-    ub=5
-    Max_iter=T
-     # initialize the location and Energy of the rabbit
-    Rabbit_Location=np.zeros(dim)
-    Rabbit_Energy=float("inf")  #change this to -inf for maximization problems
-    #Initialize the locations of Harris' hawks
-    X=np.random.uniform(0,1,(SearchAgents_no,dim)) *(ub-lb)+lb
-    
-    #Initialize convergence
-    #convergence_curve=np.zeros(Max_iter)
-    convergence_curve=[]
-    
-    #Initialize the locations of Harris' hawks
-    X=np.random.uniform(0,1,(SearchAgents_no,dim)) *(ub-lb)+lb
-    
    
     
+    for i in range(episodes):
+        times = 0.0 
+        state_control = InitialState_Update(x=cx[0], y=cy[0], yaw=0.0, v=0.0) 
+        state_save=StateSave()
+        state_save.append_all(times, state_control)  
+        target_course = TargetCourse(cx, cy)  
+        lastIndex = len(cx) - 1 
+        
+        lf=Lfc
+        target_ind, _ = target_course.search_target_index(state_control,lf)   
+        p= proportional_control(target_speed, state_control.v) 
+        steering_angle, target_ind = pure_pursuit_steer_control(state_control, target_course, target_ind,lf)             
+        CTE=cross_track_error(cx, cy, state_control.x, state_control.y)
+        
+        
+
+        # initial state
+        state_RL=[CTE, steering_angle, lf] # RL state: [Cross-track error, steering angle, lookahead distance]
+        # action: lookahead distance
+        total_reward = 0
+        done = False
+        episode_steps = 0
+        while not done:
+            episode_steps+=1 
+            agent.iters=episode_steps
+            if i+1==3:
+                print('stop')
+            
+            
+            if  episode_steps < 2: # To increase exploration, 10 orj
+                population_size=1
+                dim=1
+                action=np.random.uniform(0,1,(population_size,dim)) *(ub-lb)+lb #action=lf (look ahead distance)
+                lf=action[0][0]
+                action=action[0]
+                #action = env.action_space.sample() # Orj
+
+            else:
+                action = agent.act(state_RL) # to sample the actions by Gaussian 
+            print(action)
+            state_control.update(p, steering_angle)
+            times += dt
+            state_save.append_all(times, state_control)
+            p= proportional_control(target_speed, state_control.v) 
+            steering_angle, target_ind = pure_pursuit_steer_control(state_control, target_course, target_ind,lf)             
+            CTE=cross_track_error(cx, cy, state_control.x, state_control.y) 
+            print('CTE: ', CTE)
+            state_RL_next=[CTE,steering_angle,lf]
+            reward, done=reward_calculate(state_RL_next)
+            #next_state, reward, done, _ = env.step(action) # orj
+            
+             # Ignore the "done" signal if it comes from hitting the time horizon.
+            if episode_steps == max_episode_steps: # if the current episode has reached its maximum allowed steps
+                mask = 1
+            else:
+                mask = float(not done)
+            
+            if (len(agent.memory) >= agent.memory.batch_size): 
+                agent.step()
+            
+            if total_reward<-10000:
+                 print('Dur')
+            
+            total_reward += reward
+            state_RL=state_RL_next
+            #state = next_state # orj
+            print(f"episode: {i+1}, steps:{episode_steps}, current reward: {reward}")
+            agent.memory.push((state_RL, action, reward, state_RL_next, mask))
+            #env.render()
+        
+        reward_list.append(total_reward)
+        avg_score_deque.append(total_reward)
+        mean = np.mean(avg_score_deque)
+        avg_scores_list.append(mean)
+        
+    plt.plot(reward_list)
+    agent.save()
+    print(f"episode: {i+1}, steps:{episode_steps}, current reward: {total_reward}, max reward: {np.max(reward_list)}")
+    
+                
+    return reward_list, avg_scores_list
+
+
+# action: heading angle
+action_size = 1
+print(f'dim of each action = {action_size}')
+# state: cross-track error, steering angle, lookahead distance
+state_size = 3
+print(f'dim of state = {state_size}')
+# boundaries of the action
+high=5.0
+low=2.0
+
+
+max_episode_steps=1000 # if the agent does not reach "done" in "max_episode_steps", mask is 1
+batch_size=20 # size that will be sampled from the replay memory that has maximum of "memory_capacity"
+memory_capacity = 200 # 2000, maximum size of the memory
+gamma = 0.99            
+tau = 0.005               
+num_of_train_episodes = 1500
+num_updates = 1 # how many times you want to update the networks in each episode
+policy_freq= 2 # lower value more probability to soft update,  policy frequency for soft update of the target network borrowed by TD3 algorithm
+entropy_coef = 0.2 # For entropy regularization
+num_of_test_episodes=200
+hidden_dim=256
+
+# Traning agent
+reward, avg_reward = sac(num_of_train_episodes)
+
+
+
+# Testing
+best_actor = Actor(state_size, action_size, hidden_dim = hidden_dim, high = high, low = low)
+best_actor.load_state_dict(torch.load("path_track_actor.pkl"))        
+best_actor.to(device) 
+reward_test = []
+best_action_list = []
+best_reward_list=[]
+
+
+target_speed = 10.0  
+cx = np.arange(0, 50, 0.5)                                  # cx (list): A list of the x coordinates of the target course.
+cy = [math.sin(ix / 5.0) * ix / 5.0 for ix in cx]  
+
+
+for i in range(num_of_test_episodes):
+    times = 0.0 
+    state_control = InitialState_Update(x=cx[0], y=cy[0], yaw=0.0, v=0.0) 
+    state_save=StateSave()
+    state_save.append_all(times, state_control)  
+    target_course = TargetCourse(cx, cy)  
+    lastIndex = len(cx) - 1 
+        
+    lf=Lfc
+    target_ind, _ = target_course.search_target_index(state_control,lf)   
+    p= proportional_control(target_speed, state_control.v) 
+    steering_angle, target_ind = pure_pursuit_steer_control(state_control, target_course, target_ind,lf)             
+    CTE=cross_track_error(cx, cy, state_control.x, state_control.y)
+        
+    # initial state
+    state_RL=[CTE, steering_angle, lf] 
+    local_reward = 0
+    done = False
+    reward_previous=0
+    episode_steps = 0
+    while not done:
+        episode_steps+=1 
+        state_RL =  torch.tensor(state_RL).to(device).float()
+        action,logp = best_actor(state_RL)        
+        action = action.cpu().data.numpy() 
+        state_control.update(p, steering_angle)
+        p= proportional_control(target_speed, state_control.v) 
+        steering_angle, target_ind = pure_pursuit_steer_control(state_control, target_course, target_ind,lf)             
+        CTE=cross_track_error(cx, cy, state_control.x, state_control.y)
+        state_RL_next=[CTE,steering_angle,lf] 
+        reward, done=reward_calculate(state_RL_next)
+        if reward>reward_previous:
+            best_lookahead=action
+            best_reward=reward
+        #state, r, done, _ = new_env.step(action)
+        local_reward += reward
+        if episode_steps == max_episode_steps: # if the current episode has reached its maximum allowed steps
+                done=True
+        
+                
     
     
-    state = State(x=cx[0], y=cy[0], yaw=0.0, v=0.0)               # state (State): The vehicle's initial state. The vehicle is initialized at the origin with zero velocity and orientation.
+    reward_test.append(local_reward)
+    best_action_list.append(best_lookahead)
+    best_reward_list.append(best_reward)
 
-    lastIndex = len(cx) - 1                                     # lastIndex (int): The index of the last point on the target course.
-    time = 0.0                                                  # time (float): The current time in the simulation.
-    states = States()                                           # states (States): The vehicle's states at each time step.
-    states.append(time, state)                                  # This line appends the initial state to the states object.
-    target_course = TargetCourse(cx, cy)                        # target_course (TargetCourse): The target course that the vehicle should follow.
-    lf=2.5 # initial lookahead distance
-    target_ind, _ = target_course.search_target_index(state,lf)    # target_ind (int): The index of the target point on the target course that the vehicle should follow.
-    t=0 # iteration
-    start = timeit.default_timer()
-    dt = 0.1 
-    while T >= time and lastIndex > target_ind:                 # This loop continues as long as the simulation time (T) has not exceeded and the target index is within the valid range.
-        
-        # Main-Update
-        ai = proportional_control(target_speed, state.v)        # ai (float): The acceleration required to adjust the vehicle's velocity to the target velocity.
-        di, target_ind = pure_pursuit_steer_control(            # di (float): The steering angle required to follow the target point on the trajectory.
-            state, target_course, target_ind,lf)                   # target_ind (int): The index of the target point on the target course that the vehicle should follow.                                   
-        state.update(ai, di) 
-        time += dt
-        states.append(time, state)
-         
-        print("state-x:", state.x)
-        
-        if t==0: # initialization
-            #fitness=reward(cx, cy, states.x, states.y)
-            for i in range(0,SearchAgents_no):
-            
-                # Check boundries         
-                X[i,:]=np.clip(X[i,:], lb, ub)
-                lf=X[i,:]
-                di, target_ind = pure_pursuit_steer_control(            # di (float): The steering angle required to follow the target point on the trajectory.
-                state, target_course, target_ind,lf)                   # target_ind (int): The index of the target point on the target course that the vehicle should follow.                                   
-                state.update(ai, di) 
-                
-                fitness=reward(cx, cy, state.x, state.y) # cx, cy --> target trajectory
-            
-                # fitness of locations
-                #fitness=objf(X[i,:])
-            
-                # Update the location of Rabbit
-                if fitness<Rabbit_Energy: # Change this to > for maximization problem
-                    Rabbit_Energy=fitness 
-                    Rabbit_Location=X[i,:].copy()
-                    X_best= Rabbit_Location
-                    Fitness_best=Rabbit_Energy
-            
-        E1=2*(1-(t/T)) # factor to show the decreaing energy of rabbit    
-        
-        # Update the location of Harris' hawks 
-        for i in range(0,SearchAgents_no):
-
-            E0=2*random.random()-1;  # -1<E0<1
-            Escaping_Energy=E1*(E0)  # escaping energy of rabbit Eq. (3) in the paper
-
-            # -------- Exploration phase Eq. (1) in paper -------------------
-
-            if abs(Escaping_Energy)>=1:
-                #Harris' hawks perch randomly based on 2 strategy:
-                q = random.random()
-                rand_Hawk_index = math.floor(SearchAgents_no*random.random())
-                X_rand = X[rand_Hawk_index, :]
-                if q<0.5:
-                    # perch based on other family members
-                    X[i,:]=X_rand-random.random()*abs(X_rand-2*random.random()*X[i,:])
-
-                elif q>=0.5:
-                    #perch on a random tall tree (random site inside group's home range)
-                    X[i,:]=(Rabbit_Location - X.mean(0))-random.random()*((ub-lb)*random.random()+lb)
-
-            # -------- Exploitation phase -------------------
-            elif abs(Escaping_Energy)<1:
-                #Attacking the rabbit using 4 strategies regarding the behavior of the rabbit
-
-                #phase 1: ----- surprise pounce (seven kills) ----------
-                #surprise pounce (seven kills): multiple, short rapid dives by different hawks
-
-                r=random.random() # probablity of each event
-                
-                if r>=0.5 and abs(Escaping_Energy)<0.5: # Hard besiege Eq. (6) in paper
-                    X[i,:]=(Rabbit_Location)-Escaping_Energy*abs(Rabbit_Location-X[i,:])
-
-                if r>=0.5 and abs(Escaping_Energy)>=0.5:  # Soft besiege Eq. (4) in paper
-                    Jump_strength=2*(1- random.random()); # random jump strength of the rabbit
-                    X[i,:]=(Rabbit_Location-X[i,:])-Escaping_Energy*abs(Jump_strength*Rabbit_Location-X[i,:])
-                
-                #phase 2: --------performing team rapid dives (leapfrog movements)----------
-
-                if r<0.5 and abs(Escaping_Energy)>=0.5: # Soft besiege Eq. (10) in paper
-                    #rabbit try to escape by many zigzag deceptive motions
-                    Jump_strength=2*(1-random.random())
-                    X1=Rabbit_Location-Escaping_Energy*abs(Jump_strength*Rabbit_Location-X[i,:]);
-                    # Check boundries         
-                    X1=np.clip(X1, lb, ub)
-                    lf=X1
-                    di, target_ind = pure_pursuit_steer_control(            # di (float): The steering angle required to follow the target point on the trajectory.
-                    state, target_course, target_ind,lf)                   # target_ind (int): The index of the target point on the target course that the vehicle should follow.                                   
-                    state.update(ai, di) 
-                    fitness_X1=reward(cx, cy, state.x, state.y) 
+optimal_lookahead=best_action_list[best_reward_list.index(max(best_reward_list))]
+import plotly.graph_objects as go
+x = np.array(range(len(reward_test)))
+m = np.mean(reward_test)
 
 
-                    if fitness_X1< fitness: # improved move?
-                        X[i,:] = X1.copy()
-                        X_best= X[i,:]
-                        Fitness_best=fitness_X1
-                    else: # hawks perform levy-based short rapid dives around the rabbit
-                        X2=Rabbit_Location-Escaping_Energy*abs(Jump_strength*Rabbit_Location-X[i,:])+np.multiply(np.random.randn(dim),Levy(dim))
-                        # Check boundries         
-                        X2=np.clip(X2, lb, ub)
-                        lf=X2
-                        di, target_ind = pure_pursuit_steer_control(            # di (float): The steering angle required to follow the target point on the trajectory.
-                        state, target_course, target_ind,lf)                   # target_ind (int): The index of the target point on the target course that the vehicle should follow.                                   
-                        state.update(ai, di) 
-                        fitness_X2=reward(cx, cy, state.x, state.y) 
-                        
-                        if fitness_X2< fitness:
-                            X[i,:] = X2.copy()
-                if r<0.5 and abs(Escaping_Energy)<0.5:   # Hard besiege Eq. (11) in paper
-                     Jump_strength=2*(1-random.random())
-                     X1=Rabbit_Location-Escaping_Energy*abs(Jump_strength*Rabbit_Location-X.mean(0))
-                     # Check boundries         
-                     X1=np.clip(X1, lb, ub)
-                     lf=X1
-                     di, target_ind = pure_pursuit_steer_control(            # di (float): The steering angle required to follow the target point on the trajectory.
-                     state, target_course, target_ind,lf)                   # target_ind (int): The index of the target point on the target course that the vehicle should follow.                                   
-                     state.update(ai, di) 
-                     fitness_X1=reward(cx, cy, state.x, state.y) 
-                     if fitness_X1< fitness: # improved move?
-                        X[i,:] = X1.copy()
-                        X_best= X[i,:]
-                        Fitness_best=fitness_X1
-                     else: # Perform levy-based short rapid dives around the rabbit
-                         X2=Rabbit_Location-Escaping_Energy*abs(Jump_strength*Rabbit_Location-X.mean(0))+np.multiply(np.random.randn(dim),Levy(dim))
-                         # Check boundries         
-                         X2=np.clip(X2, lb, ub)
-                         lf=X2
-                         di, target_ind = pure_pursuit_steer_control(            # di (float): The steering angle required to follow the target point on the trajectory.
-                         state, target_course, target_ind,lf)                   # target_ind (int): The index of the target point on the target course that the vehicle should follow.                                   
-                         state.update(ai, di) 
-                         fitness_X2=reward(cx, cy, state.x, state.y) 
-                         
-                         if fitness_X2< fitness:
-                            X[i,:] = X2.copy()
-                            X_best= X[i,:]
-                            Fitness_best=fitness_X2
-                
-        #convergence_curve[t]=Rabbit_Energy
-        convergence_curve.append(Fitness_best)
-        #if (t%1==0):
-               #print(['At iteration '+ str(t)+ ' the best fitness is '+ str(Rabbit_Energy)])
-        t+=1
-        lf=X_best
-        #s.best =Rabbit_Energy 
-        #s.bestIndividual = Rabbit_Location
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=x, y=reward_test, name='test reward',
+                                 line=dict(color="green", width=1)))
 
-        """ 
-            This section calculates the acceleration and steering angle required to follow the target point on the trajectory.
-            The vehicle's state is updated using the calculated control inputs.
-            The simulation time and vehicle states are updated.
-            If show_animation is enabled, the vehicle's trajectory, target point, and animation are plotted for visualization.
-        """
-        
-        '''
-        if show_animation:  # pragma: no cover
-            plt.cla()
-            # for stopping simulation with the esc key.
-            plt.gcf().canvas.mpl_connect(
-                'key_release_event',
-                lambda event: [exit(0) if event.key == 'escape' else None])
-            plot_arrow(state.x, state.y, state.yaw)
-            plt.plot(cx, cy, "-r", label="course")
-            plt.plot(states.x, states.y, "-b", label="trajectory")
-            plt.plot(cx[target_ind], cy[target_ind], "xg", label="target")
-            plt.axis("equal")
-            plt.grid(True)
-            plt.title("Speed[km/h]:" + str(state.v * 3.6)[:4])
-            plt.pause(0.001)
-        '''
-        
+fig.add_trace(go.Scatter(x=x, y=[m]*len(reward_test), name='average reward',
+                                 line=dict(color="red", width=1)))
     
-        
+fig.update_layout(title="SAC",
+                           xaxis_title= "test",
+                           yaxis_title= "reward")
+fig.show()
 
-    
-    stop = timeit.default_timer()
-    estimated_time=stop - start
-    # Test
-    assert lastIndex >= target_ind, "Cannot goal"
-    #states.y[0]=0
-    plt.plot(cx, cy, ".r", label="Target trajectory")
-    plt.plot(states.x, states.y, "-b", label="Found trajectory")
-    plt.legend()
-    #plt.xlabel("x[m]")
-    #plt.ylabel("y[m]")
-    #plt.axis("equal")
-    plt.grid(True)
-    plt.xlim((0,45))
-    plt.show()
-    print('stop')
+print("average reward:", m)
 
 
-    '''
-    if show_animation:  
-        plt.cla()
-        plt.plot(cx, cy, ".r", label="course")
-        plt.plot(states.x, states.y, "-b", label="trajectory")
-        plt.legend()
-        plt.xlabel("x[m]")
-        plt.ylabel("y[m]")
-        plt.axis("equal")
-        plt.grid(True)
-
-        plt.subplots(1)
-        plt.plot(states.t, [iv * 3.6 for iv in states.v], "-r")
-        plt.xlabel("Time[s]")
-        plt.ylabel("Speed[km/h]")
-        plt.grid(True)
-        plt.show()
-    '''
-
-if __name__ == '__main__':
-    print("Pure pursuit path tracking simulation start")
-    main()
-
-    """ 
-        The aim of this section is to orchestrate the entire simulation process.
-        It initializes the vehicle's state, calculates control inputs, updates the vehicle's state, and plots the results for visualization.
-        This demonstrates how the pure pursuit path tracking algorithm and PID speed control work together to guide the vehicle along the desired trajectory.
-    """
