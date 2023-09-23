@@ -357,6 +357,11 @@ class Actor(nn.Module):
         logp =logp-torch.log(self.action_scale * (1 - tanh.pow(2)) + noise)
         logp = logp.sum(1, keepdim=True)
         
+        
+        if len(action)>1:
+            print('stop')
+        
+
         return action, logp
 
 
@@ -710,8 +715,9 @@ for i in range(num_of_test_episodes):
     while not done:
         episode_steps+=1 
         state_RL =  torch.tensor(state_RL).to(device).float()
-        action,logp = best_actor(state_RL)        
-        action = action.cpu().data.numpy() 
+        action,_=best_actor.sample(state_RL)
+        mean,logp = best_actor(state_RL)        
+        mean = mean.cpu().data.numpy() 
         state_control.update(p, steering_angle)
         p= proportional_control(target_speed, state_control.v) 
         steering_angle, target_ind = pure_pursuit_steer_control(state_control, target_course, target_ind,lf)             
