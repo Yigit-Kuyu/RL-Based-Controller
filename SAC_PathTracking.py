@@ -715,6 +715,7 @@ for i in range(num_of_test_episodes):
     while not done:
         episode_steps+=1 
         state_RL =  torch.tensor(state_RL).to(device).float()
+        state_RL =  torch.tensor(state_RL).unsqueeze(0).to(device).float()
         action,_=best_actor.sample(state_RL)
         mean,logp = best_actor(state_RL)        
         mean = mean.cpu().data.numpy() 
@@ -730,7 +731,7 @@ for i in range(num_of_test_episodes):
             best_reward=reward
             reward_previous=reward
         #state, r, done, _ = new_env.step(action)
-        local_reward += reward
+        local_reward += reward[0]
         if episode_steps == max_episode_steps: # if the current episode has reached its maximum allowed steps
                 done=True
         
@@ -742,6 +743,10 @@ for i in range(num_of_test_episodes):
     best_reward_list.append(best_reward)
 
 optimal_lookahead=best_action_list[best_reward_list.index(max(best_reward_list))]
+
+
+
+
 import plotly.graph_objects as go
 x = np.array(range(len(reward_test)))
 m = np.mean(reward_test)
