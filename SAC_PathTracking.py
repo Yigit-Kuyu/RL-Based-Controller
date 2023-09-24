@@ -584,9 +584,7 @@ def sac(episodes):
         while not done:
             episode_steps+=1 
             agent.iters=episode_steps
-            if i+1==3:
-                print('stop')
-            
+          
             
             if  episode_steps < 10: # To increase exploration, 10 orj
                 population_size=1
@@ -712,14 +710,17 @@ for i in range(num_of_test_episodes):
     done = False
     reward_previous=-1000
     episode_steps = 0
-    while not done:
-        episode_steps+=1 
+    while not done or  lastIndex > target_ind:
+        episode_steps+=1
+        print('test episonde:',i, 'test iteration: ', episode_steps)
         state_RL =  torch.tensor(state_RL).to(device).float()
         state_RL =  torch.tensor(state_RL).unsqueeze(0).to(device).float()
         action,_=best_actor.sample(state_RL)
         mean,logp = best_actor(state_RL)        
         mean = mean.cpu().data.numpy() 
         state_control.update(p, steering_angle)
+        state_save.append_all(times, state_control)
+        times += dt
         p= proportional_control(target_speed, state_control.v) 
         steering_angle, target_ind = pure_pursuit_steer_control(state_control, target_course, target_ind,lf)             
         CTE=cross_track_error(cx, cy, state_control.x, state_control.y)
@@ -731,7 +732,7 @@ for i in range(num_of_test_episodes):
             best_reward=reward
             reward_previous=reward
         #state, r, done, _ = new_env.step(action)
-        local_reward += reward[0]
+        local_reward += float(reward[0])
         if episode_steps == max_episode_steps: # if the current episode has reached its maximum allowed steps
                 done=True
         
