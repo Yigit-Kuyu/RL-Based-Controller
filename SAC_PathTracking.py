@@ -688,7 +688,8 @@ best_reward_list=[]
 target_speed = 10.0  
 cx = np.arange(0, 50, 0.5)                                  # cx (list): A list of the x coordinates of the target course.
 cy = [math.sin(ix / 5.0) * ix / 5.0 for ix in cx]  
-
+x_location=[]
+y_location=[]
 
 for i in range(num_of_test_episodes):
     times = 0.0 
@@ -710,10 +711,10 @@ for i in range(num_of_test_episodes):
     done = False
     reward_previous=-1000
     episode_steps = 0
+   
     while not done or  lastIndex > target_ind:
         episode_steps+=1
         print('test episonde:',i, 'test iteration: ', episode_steps)
-        #state_RL =  torch.tensor(state_RL).to(device).float()
         state_RL =  torch.tensor(state_RL).unsqueeze(0).to(device).float()
         action,_=best_actor.sample(state_RL)
         mean,logp = best_actor(state_RL)        
@@ -741,10 +742,21 @@ for i in range(num_of_test_episodes):
     
     
     reward_test.append(local_reward)
+    x_location.append(state_save.x)
+    y_location.append(state_save.y)
     best_action_list.append(best_lookahead)
     best_reward_list.append(best_reward)
 
-optimal_lookahead=best_action_list[best_reward_list.index(max(best_reward_list))]
+best_index=reward_test.index(max(reward_test))
+optimal_lookahead=best_action_list[best_index]
+best_x=x_location[best_index]
+best_y=y_location[best_index]
+
+plt.plot(best_x,best_y,label="found trajectory")
+plt.plot(cx,cy,label="reference trajectory")
+plt.grid()
+plt.legend()
+plt.show()
 
 
 
