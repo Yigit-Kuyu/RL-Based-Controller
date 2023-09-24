@@ -672,7 +672,7 @@ num_of_test_episodes=200
 hidden_dim=256
 
 # Traning agent
-reward, avg_reward = sac(num_of_train_episodes)
+#reward, avg_reward = sac(num_of_train_episodes)
 
 
 
@@ -713,7 +713,7 @@ for i in range(num_of_test_episodes):
     while not done or  lastIndex > target_ind:
         episode_steps+=1
         print('test episonde:',i, 'test iteration: ', episode_steps)
-        state_RL =  torch.tensor(state_RL).to(device).float()
+        #state_RL =  torch.tensor(state_RL).to(device).float()
         state_RL =  torch.tensor(state_RL).unsqueeze(0).to(device).float()
         action,_=best_actor.sample(state_RL)
         mean,logp = best_actor(state_RL)        
@@ -733,6 +733,7 @@ for i in range(num_of_test_episodes):
             reward_previous=reward
         #state, r, done, _ = new_env.step(action)
         local_reward += float(reward[0])
+        state_RL=state_RL_next
         if episode_steps == max_episode_steps: # if the current episode has reached its maximum allowed steps
                 done=True
         
