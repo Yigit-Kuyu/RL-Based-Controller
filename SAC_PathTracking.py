@@ -357,10 +357,6 @@ class Actor(nn.Module):
         logp =logp-torch.log(self.action_scale * (1 - tanh.pow(2)) + noise)
         logp = logp.sum(1, keepdim=True)
         
-        
-        if len(action)>1:
-            print('stop')
-        
 
         return action, logp
 
@@ -758,26 +754,5 @@ plt.grid()
 plt.legend()
 plt.show()
 
-
-
-
-import plotly.graph_objects as go
-x = np.array(range(len(reward_test)))
-m = np.mean(reward_test)
-
-
-fig = go.Figure()
-fig.add_trace(go.Scatter(x=x, y=reward_test, name='test reward',
-                                 line=dict(color="green", width=1)))
-
-fig.add_trace(go.Scatter(x=x, y=[m]*len(reward_test), name='average reward',
-                                 line=dict(color="red", width=1)))
-    
-fig.update_layout(title="SAC",
-                           xaxis_title= "test",
-                           yaxis_title= "reward")
-fig.show()
-
-print("average reward:", m)
 
 
