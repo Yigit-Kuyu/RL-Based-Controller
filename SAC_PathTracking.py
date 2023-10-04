@@ -668,7 +668,7 @@ num_of_test_episodes=200
 hidden_dim=256
 
 # Traning agent
-#reward, avg_reward = sac(num_of_train_episodes)
+reward, avg_reward = sac(num_of_train_episodes)
 
 
 
